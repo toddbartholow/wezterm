@@ -1,6 +1,8 @@
 use crate::scripting::guiwin::GuiWin;
 use config::keyassignment::{KeyAssignment, PromptInputLine};
+use mux::tab::TabId;
 use mux::termwiztermtab::TermWizTerminal;
+use mux::Mux;
 use mux_lua::MuxPane;
 use std::rc::Rc;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent};
@@ -70,6 +72,66 @@ pub fn show_line_prompt_overlay(
         anyhow::Result::<()>::Ok(())
     })
     .detach();
+
+    Ok(())
+}
+
+/// Unlike PromptHost, escape cancels even when the line has text in it,
+/// since the rename prompt starts out holding the current title.
+struct RenameTabHost {
+    history: BasicHistory,
+}
+
+impl LineEditorHost for RenameTabHost {
+    fn history(&mut self) -> &mut dyn History {
+        &mut self.history
+    }
+
+    fn resolve_action(
+        &mut self,
+        event: &InputEvent,
+        _editor: &mut LineEditor<'_>,
+    ) -> Option<Action> {
+        match event {
+            InputEvent::Key(KeyEvent {
+                key: KeyCode::Escape,
+                ..
+            }) => Some(Action::Cancel),
+            _ => None,
+        }
+    }
+}
+
+/// Prompts for a new title for `tab_id`, starting from `current_title`.
+/// Submitting an empty line clears the tab title, so that the tab shows
+/// the title of its active pane again.
+pub fn show_rename_tab_overlay(
+    mut term: TermWizTerminal,
+    tab_id: TabId,
+    current_title: String,
+) -> anyhow::Result<()> {
+    term.no_grab_mouse_in_raw_mode();
+    term.render(&[Change::Text(
+        "Rename tab (Enter to apply, Esc to cancel, \
+         empty to use the program's title)\r\n"
+            .to_string(),
+    )])?;
+
+    let mut host = RenameTabHost {
+        history: BasicHistory::default(),
+    };
+    let mut editor = LineEditor::new(&mut term);
+    editor.set_prompt("> ");
+    let line = editor.read_line_with_optional_initial_value(&mut host, Some(&current_title))?;
+
+    if let Some(line) = line {
+        promise::spawn::spawn_into_main_thread(async move {
+            if let Some(tab) = Mux::get().get_tab(tab_id) {
+                tab.set_title(line.trim());
+            }
+        })
+        .detach();
+    }
 
     Ok(())
 }

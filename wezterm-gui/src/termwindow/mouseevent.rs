@@ -463,6 +463,9 @@ impl super::TermWindow {
             WMEK::Press(MousePress::Left) => match item {
                 TabBarItem::Tab { tab_idx, .. } => {
                     self.activate_tab(tab_idx as isize).ok();
+                    if self.last_mouse_click.as_ref().map(|c| c.streak) == Some(2) {
+                        self.show_rename_tab_prompt();
+                    }
                 }
                 TabBarItem::NewTabButton { .. } => {
                     self.do_new_tab_button_click(MousePress::Left);

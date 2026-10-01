@@ -648,6 +648,8 @@ pub enum KeyAssignment {
     PromptInputLine(PromptInputLine),
     InputSelector(InputSelector),
     Confirmation(Confirmation),
+    /// Prompt for a new title for the active tab
+    RenameTab,
 }
 impl_lua_conversion_dynamic!(KeyAssignment);
 

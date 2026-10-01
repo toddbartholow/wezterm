@@ -77,6 +77,10 @@ As features stabilize some brief notes about them will accumulate here.
   easier to spot the remaining candidates. Thanks to @mr-felixoid and @bew! #7752
 
 #### New
+* [RenameTab](config/lua/keyassignment/RenameTab.md) key assignment, which
+  prompts for a new title for the active tab, starting from its current title.
+  It is also in the command palette as "Rename tab", and double-clicking a tab
+  in the tab bar opens the same prompt.
 * [command_palette_line_height](config/lua/config/command_palette_line_height.md)
   option to scale the vertical spacing of rows in the command palette,
   independently of [line_height](config/lua/config/line_height.md) which is for terminal cells only.
