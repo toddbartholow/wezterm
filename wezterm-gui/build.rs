@@ -3,7 +3,6 @@ fn main() {
 
     #[cfg(windows)]
     {
-        use anyhow::Context as _;
         use std::io::Write;
         use std::path::Path;
         let profile = std::env::var("PROFILE").unwrap();
@@ -14,52 +13,55 @@ fn main() {
         let exe_output_dir = repo_dir.join("target").join(profile);
         let windows_dir = repo_dir.join("assets").join("windows");
 
-        let conhost_dir = windows_dir.join("conhost");
-        for name in &["conpty.dll", "OpenConsole.exe"] {
-            let dest_name = exe_output_dir.join(name);
-            let src_name = conhost_dir.join(name);
+        /// Copies a bundled runtime file next to the built executables when
+        /// it is missing or differs from the one in assets, so that updating
+        /// a bundled file also updates existing build directories.
+        fn copy_bundled(src_name: &Path, dest_name: &Path) {
+            println!("cargo:rerun-if-changed={}", src_name.display());
 
-            if !dest_name.exists() {
-                std::fs::copy(&src_name, &dest_name)
-                    .context(format!(
-                        "copy {} -> {}",
+            let up_to_date = match (std::fs::read(src_name), std::fs::read(dest_name)) {
+                (Ok(src), Ok(dest)) => src == dest,
+                _ => false,
+            };
+            if up_to_date {
+                return;
+            }
+
+            if let Err(err) = std::fs::copy(src_name, dest_name) {
+                if dest_name.exists() {
+                    // Most likely in use by a running wezterm built from
+                    // this tree; keep going with the copy that is there.
+                    println!(
+                        "cargo:warning=could not update {}: {err:#}",
+                        dest_name.display()
+                    );
+                } else {
+                    panic!(
+                        "copy {} -> {}: {err:#}",
                         src_name.display(),
                         dest_name.display()
-                    ))
-                    .unwrap();
+                    );
+                }
             }
+        }
+
+        let conhost_dir = windows_dir.join("conhost");
+        for name in &["conpty.dll", "OpenConsole.exe"] {
+            copy_bundled(&conhost_dir.join(name), &exe_output_dir.join(name));
         }
 
         let angle_dir = windows_dir.join("angle");
         for name in &["libEGL.dll", "libGLESv2.dll"] {
-            let dest_name = exe_output_dir.join(name);
-            let src_name = angle_dir.join(name);
-
-            if !dest_name.exists() {
-                std::fs::copy(&src_name, &dest_name)
-                    .context(format!(
-                        "copy {} -> {}",
-                        src_name.display(),
-                        dest_name.display()
-                    ))
-                    .unwrap();
-            }
+            copy_bundled(&angle_dir.join(name), &exe_output_dir.join(name));
         }
 
         {
             let dest_mesa = exe_output_dir.join("mesa");
             let _ = std::fs::create_dir(&dest_mesa);
-            let dest_name = dest_mesa.join("opengl32.dll");
-            let src_name = windows_dir.join("mesa").join("opengl32.dll");
-            if !dest_name.exists() {
-                std::fs::copy(&src_name, &dest_name)
-                    .context(format!(
-                        "copy {} -> {}",
-                        src_name.display(),
-                        dest_name.display()
-                    ))
-                    .unwrap();
-            }
+            copy_bundled(
+                &windows_dir.join("mesa").join("opengl32.dll"),
+                &dest_mesa.join("opengl32.dll"),
+            );
         }
 
         // If a file named `.tag` is present, we'll take its contents for the
