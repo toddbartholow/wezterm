@@ -310,7 +310,7 @@ As features stabilize some brief notes about them will accumulate here.
   `PromptInputLine` and the debug overlay. Thanks to @dyxushuai! #7556
 
 #### Updated
-* Bundled conpty.dll and OpenConsole.exe to build 1.22.250204002.nupkg
+* Bundled conpty.dll and OpenConsole.exe to build 1.24.260710001.nupkg #7774
 * Bundled harfbuzz to 11.2.1
 * Bundled libssh to 0.11.1
 * Bundled freetype to 2.13.3
