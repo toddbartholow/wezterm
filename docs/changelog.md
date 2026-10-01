@@ -308,6 +308,12 @@ As features stabilize some brief notes about them will accumulate here.
   Thanks to @bew! #8001
 * IME: committed text is now handled correctly in prompt overlays such as
   `PromptInputLine` and the debug overlay. Thanks to @dyxushuai! #7556
+* perf: programs that animate their title (eg: spinners in agent CLIs) could
+  saturate the GUI thread and leave the window "Not Responding". Title changes
+  now trigger `update-status` at most once per `status_update_interval`, the
+  tab bar marshals tabs, panes and the config into lua once per rebuild rather
+  than twice per tab (and not at all without a `format-tab-title` handler),
+  and the OS window title is only set when it changes. #8086
 
 #### Updated
 * Bundled conpty.dll and OpenConsole.exe to build 1.24.260710001.nupkg #7774

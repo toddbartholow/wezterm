@@ -436,6 +436,12 @@ pub struct TermWindow {
     line_quad_cache: RefCell<LfuCache<LineQuadCacheKey, LineQuadCacheValue>>,
 
     last_status_call: Instant,
+    /// When an alert (eg: a title change) last triggered an update-status
+    /// event, and whether a trailing one is already scheduled.
+    last_alert_status_call: Option<Instant>,
+    alert_status_pending: bool,
+    /// The title most recently passed to the OS window
+    window_title: Option<String>,
     cursor_blink_state: RefCell<ColorEase>,
     blink_state: RefCell<ColorEase>,
     rapid_blink_state: RefCell<ColorEase>,
@@ -759,6 +765,9 @@ impl TermWindow {
                 &config,
             )),
             last_status_call: Instant::now(),
+            last_alert_status_call: None,
+            alert_status_pending: false,
+            window_title: None,
             cursor_blink_state: RefCell::new(ColorEase::new(
                 config.cursor_blink_rate,
                 config.cursor_blink_ease_in,
@@ -1217,7 +1226,7 @@ impl TermWindow {
                         | Alert::Progress(_),
                     ..
                 } => {
-                    self.update_title();
+                    self.update_title_for_alert();
                 }
                 MuxNotification::Alert {
                     alert: Alert::PaletteChanged,
@@ -1899,6 +1908,45 @@ impl TermWindow {
         self.update_title_impl();
     }
 
+    /// Like update_title, but for alerts from the panes in this window.
+    /// Those can arrive many times per second (eg: programs that animate
+    /// a spinner in their title), and the update-status event they trigger
+    /// runs arbitrary lua on the GUI thread, so it is limited to once per
+    /// status_update_interval, with a trailing call so that the status
+    /// still reflects the final state.  The tab bar and window title are
+    /// updated immediately.
+    fn update_title_for_alert(&mut self) {
+        self.update_title_impl();
+
+        if self.alert_status_pending {
+            return;
+        }
+        let interval = Duration::from_millis(self.config.status_update_interval);
+        let now = Instant::now();
+        let due = self
+            .last_alert_status_call
+            .map(|last| last + interval)
+            .unwrap_or(now);
+        if due <= now {
+            self.last_alert_status_call.replace(now);
+            self.schedule_status_update();
+            return;
+        }
+
+        if let Some(window) = self.window.clone() {
+            self.alert_status_pending = true;
+            promise::spawn::spawn(async move {
+                Timer::at(due).await;
+                window.notify(TermWindowNotif::Apply(Box::new(|term_window| {
+                    term_window.alert_status_pending = false;
+                    term_window.last_alert_status_call.replace(Instant::now());
+                    term_window.schedule_status_update();
+                })));
+            })
+            .detach();
+        }
+    }
+
     fn window_contains_pane(&mut self, pane_id: PaneId) -> bool {
         let mux = Mux::get();
 
@@ -2073,7 +2121,12 @@ impl TermWindow {
         };
 
         if let Some(window) = self.window.as_ref() {
-            window.set_title(&title);
+            // This runs for every title change in any pane in the window,
+            // most of which leave the window title as it was.
+            if self.window_title.as_deref() != Some(title.as_str()) {
+                window.set_title(&title);
+                self.window_title.replace(title);
+            }
 
             let show_tab_bar = if tabs_count == 1 {
                 self.config.enable_tab_bar && !self.config.hide_tab_bar_if_only_one_tab

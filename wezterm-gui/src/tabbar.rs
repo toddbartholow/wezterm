@@ -1,7 +1,8 @@
 use crate::termwindow::{PaneInformation, TabInformation, UIItem, UIItemType};
 use config::{ConfigHandle, TabBarColors};
 use finl_unicode::grapheme_clusters::Graphemes;
-use mlua::FromLua;
+use mlua::{FromLua, IntoLua};
+use std::cell::RefCell;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use termwiz::cell::{unicode_column_width, Cell, CellAttributes};
@@ -51,61 +52,101 @@ struct TitleText {
     has_indeterminate: bool,
 }
 
-fn call_format_tab_title(
-    tab: &TabInformation,
-    tab_info: &[TabInformation],
-    pane_info: &[PaneInformation],
+/// The lua values that are identical for every `compute_tab_title` call made by
+/// one `TabBarState::new`. Building them once and passing them down keeps
+/// userdata creation proportional to tabs+panes rather than tabs*(tabs+panes).
+/// The config is converted only when it changes; see `tab_title_config`.
+struct TabTitleContext<'lua> {
+    lua: &'lua mlua::Lua,
+    tabs: mlua::Table<'lua>,
+    panes: mlua::Table<'lua>,
+    config: mlua::Value<'lua>,
+}
+
+thread_local! {
+    /// The config most recently converted for format-tab-title. Holding it
+    /// keeps its allocation alive, so a different config can't reuse its
+    /// address and be mistaken for it.
+    static TAB_TITLE_CONFIG: RefCell<Option<ConfigHandle>> = RefCell::new(None);
+}
+const TAB_TITLE_CONFIG_KEY: &str = "wezterm-format-tab-title-config";
+
+/// Converting the config to lua is most of the cost of calling
+/// format-tab-title, and the tab bar is rebuilt on every title change in the
+/// window, so the converted value is kept in the lua registry and reused
+/// until the config (or the lua state, on reload) changes. A handler that
+/// modifies its config argument will see those modifications next time.
+fn tab_title_config<'lua>(
+    lua: &'lua mlua::Lua,
     config: &ConfigHandle,
+) -> mlua::Result<mlua::Value<'lua>> {
+    let same_config = TAB_TITLE_CONFIG.with(|prior| {
+        prior
+            .borrow()
+            .as_ref()
+            .map(|prior| std::ptr::eq(&**prior, &**config))
+            .unwrap_or(false)
+    });
+    if same_config {
+        let value: mlua::Value = lua.named_registry_value(TAB_TITLE_CONFIG_KEY)?;
+        if !value.is_nil() {
+            return Ok(value);
+        }
+    }
+
+    let value = (**config).clone().into_lua(lua)?;
+    lua.set_named_registry_value(TAB_TITLE_CONFIG_KEY, value.clone())?;
+    TAB_TITLE_CONFIG.with(|prior| prior.borrow_mut().replace(config.clone()));
+    Ok(value)
+}
+
+fn call_format_tab_title(
+    ctx: &TabTitleContext,
+    tab: &TabInformation,
     hover: bool,
     tab_max_width: usize,
 ) -> Option<TitleText> {
-    match config::run_immediate_with_lua_config(|lua| {
-        if let Some(lua) = lua {
-            let tabs = lua.create_sequence_from(tab_info.iter().cloned())?;
-            let panes = lua.create_sequence_from(pane_info.iter().cloned())?;
-
-            let v = config::lua::emit_sync_callback(
-                &*lua,
+    let lua = ctx.lua;
+    match (|| -> anyhow::Result<Option<TitleText>> {
+        let v = config::lua::emit_sync_callback(
+            lua,
+            (
+                "format-tab-title".to_string(),
                 (
-                    "format-tab-title".to_string(),
-                    (
-                        tab.clone(),
-                        tabs,
-                        panes,
-                        (**config).clone(),
-                        hover,
-                        tab_max_width,
-                    ),
+                    tab.clone(),
+                    ctx.tabs.clone(),
+                    ctx.panes.clone(),
+                    ctx.config.clone(),
+                    hover,
+                    tab_max_width,
                 ),
-            )?;
-            match &v {
-                mlua::Value::Nil => Ok(None),
-                mlua::Value::Table(_) => {
-                    let items = <Vec<FormatItem>>::from_lua(v, &*lua)?;
+            ),
+        )?;
+        match &v {
+            mlua::Value::Nil => Ok(None),
+            mlua::Value::Table(_) => {
+                let items = <Vec<FormatItem>>::from_lua(v, lua)?;
 
-                    let esc = format_as_escapes(items.clone())?;
-                    let line = parse_status_text(&esc, CellAttributes::default());
+                let esc = format_as_escapes(items.clone())?;
+                let line = parse_status_text(&esc, CellAttributes::default());
 
-                    Ok(Some(TitleText {
-                        items,
-                        len: line.len(),
-                        has_indeterminate: false,
-                    }))
-                }
-                _ => {
-                    let s = String::from_lua(v, &*lua)?;
-                    let line = parse_status_text(&s, CellAttributes::default());
-                    Ok(Some(TitleText {
-                        len: line.len(),
-                        items: vec![FormatItem::Text(s)],
-                        has_indeterminate: false,
-                    }))
-                }
+                Ok(Some(TitleText {
+                    items,
+                    len: line.len(),
+                    has_indeterminate: false,
+                }))
             }
-        } else {
-            Ok(None)
+            _ => {
+                let s = String::from_lua(v, lua)?;
+                let line = parse_status_text(&s, CellAttributes::default());
+                Ok(Some(TitleText {
+                    len: line.len(),
+                    items: vec![FormatItem::Text(s)],
+                    has_indeterminate: false,
+                }))
+            }
         }
-    }) {
+    })() {
         Ok(s) => s,
         Err(err) => {
             log::warn!("format-tab-title: {}", err);
@@ -201,14 +242,13 @@ fn spinner_phase(tab_id: usize) -> u64 {
 }
 
 fn compute_tab_title(
+    ctx: Option<&TabTitleContext>,
     tab: &TabInformation,
-    tab_info: &[TabInformation],
-    pane_info: &[PaneInformation],
     config: &ConfigHandle,
     hover: bool,
     tab_max_width: usize,
 ) -> TitleText {
-    let title = call_format_tab_title(tab, tab_info, pane_info, config, hover, tab_max_width);
+    let title = ctx.and_then(|ctx| call_format_tab_title(ctx, tab, hover, tab_max_width));
 
     match title {
         Some(title) => title,
@@ -430,6 +470,61 @@ impl TabBarState {
         left_status: &str,
         right_status: &str,
     ) -> Self {
+        // Marshal every tab, every pane and the config into lua once here,
+        // rather than once per compute_tab_title call below, and not at all
+        // when there is no format-tab-title handler to receive them.
+        let built = config::run_immediate_with_lua_config(|lua| {
+            let ctx = match lua.as_deref() {
+                Some(lua) if config::lua::has_event_handler(lua, "format-tab-title")? => {
+                    Some(TabTitleContext {
+                        lua,
+                        tabs: lua.create_sequence_from(tab_info.iter().cloned())?,
+                        panes: lua.create_sequence_from(pane_info.iter().cloned())?,
+                        config: tab_title_config(lua, config)?,
+                    })
+                }
+                _ => None,
+            };
+            Ok(Self::build(
+                ctx.as_ref(),
+                title_width,
+                mouse_x,
+                tab_info,
+                colors,
+                config,
+                left_status,
+                right_status,
+            ))
+        });
+
+        match built {
+            Ok(built) => built,
+            Err(err) => {
+                log::warn!("format-tab-title: {}", err);
+                Self::build(
+                    None,
+                    title_width,
+                    mouse_x,
+                    tab_info,
+                    colors,
+                    config,
+                    left_status,
+                    right_status,
+                )
+            }
+        }
+    }
+
+    fn build(
+        title_ctx: Option<&TabTitleContext>,
+        title_width: usize,
+        mouse_x: Option<usize>,
+        tab_info: &[TabInformation],
+        colors: Option<&TabBarColors>,
+        config: &ConfigHandle,
+        left_status: &str,
+        right_status: &str,
+    ) -> Self {
         let colors = colors.cloned().unwrap_or_else(TabBarColors::default);
 
         let active_cell_attrs = colors.active_tab().as_cell_attributes();
@@ -474,14 +569,7 @@ impl TabBarState {
                     if tab.is_active {
                         active_tab_no = tab.tab_index;
                     }
-                    compute_tab_title(
-                        tab,
-                        tab_info,
-                        pane_info,
-                        config,
-                        false,
-                        config.tab_max_width,
-                    )
+                    compute_tab_title(title_ctx, tab, config, false, config.tab_max_width)
                 })
                 .collect()
         } else {
@@ -550,14 +638,8 @@ impl TabBarState {
 
             // Recompute the title so that it factors in both the hover state
             // and the adjusted maximum tab width based on available space.
-            let tab_title = compute_tab_title(
-                &tab_info[tab_idx],
-                tab_info,
-                pane_info,
-                config,
-                hover,
-                tab_title_len,
-            );
+            let tab_title =
+                compute_tab_title(title_ctx, &tab_info[tab_idx], config, hover, tab_title_len);
 
             let cell_attrs = if active {
                 &active_cell_attrs
