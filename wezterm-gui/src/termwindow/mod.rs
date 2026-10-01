@@ -363,6 +363,18 @@ enum EventState {
     InProgressWithQueued(Option<PaneId>),
 }
 
+/// How often alerts from panes (eg: a spinner animating in a title) may
+/// rebuild the tab bar and window title.
+const TITLE_ALERT_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Limits how often something triggered by pane alerts runs; see
+/// TermWindow::throttle_alert_action.
+#[derive(Default)]
+struct AlertThrottle {
+    last_run: Option<Instant>,
+    trailing_scheduled: bool,
+}
+
 pub struct TermWindow {
     pub window: Option<Window>,
     pub config: ConfigHandle,
@@ -436,10 +448,9 @@ pub struct TermWindow {
     line_quad_cache: RefCell<LfuCache<LineQuadCacheKey, LineQuadCacheValue>>,
 
     last_status_call: Instant,
-    /// When an alert (eg: a title change) last triggered an update-status
-    /// event, and whether a trailing one is already scheduled.
-    last_alert_status_call: Option<Instant>,
-    alert_status_pending: bool,
+    /// Rate limits for the work that alerts (eg: title changes) trigger
+    title_alert_throttle: AlertThrottle,
+    status_alert_throttle: AlertThrottle,
     /// The title most recently passed to the OS window
     window_title: Option<String>,
     cursor_blink_state: RefCell<ColorEase>,
@@ -765,8 +776,8 @@ impl TermWindow {
                 &config,
             )),
             last_status_call: Instant::now(),
-            last_alert_status_call: None,
-            alert_status_pending: false,
+            title_alert_throttle: AlertThrottle::default(),
+            status_alert_throttle: AlertThrottle::default(),
             window_title: None,
             cursor_blink_state: RefCell::new(ColorEase::new(
                 config.cursor_blink_rate,
@@ -1910,41 +1921,59 @@ impl TermWindow {
 
     /// Like update_title, but for alerts from the panes in this window.
     /// Those can arrive many times per second (eg: programs that animate
-    /// a spinner in their title), and the update-status event they trigger
-    /// runs arbitrary lua on the GUI thread, so it is limited to once per
-    /// status_update_interval, with a trailing call so that the status
-    /// still reflects the final state.  The tab bar and window title are
-    /// updated immediately.
+    /// a spinner in their title), and both rebuilding the tab bar and the
+    /// update-status event run lua on the GUI thread. So the tab bar and
+    /// window title are rebuilt at most every TITLE_ALERT_INTERVAL, and
+    /// update-status runs at most once per status_update_interval.
     fn update_title_for_alert(&mut self) {
-        self.update_title_impl();
+        self.throttle_alert_action(
+            TITLE_ALERT_INTERVAL,
+            |term_window| &mut term_window.title_alert_throttle,
+            |term_window| term_window.update_title_impl(),
+        );
+        self.throttle_alert_action(
+            Duration::from_millis(self.config.status_update_interval),
+            |term_window| &mut term_window.status_alert_throttle,
+            |term_window| term_window.schedule_status_update(),
+        );
+    }
 
-        if self.alert_status_pending {
+    /// Runs `action` now if it hasn't run within `interval`, otherwise
+    /// once more when the interval is up so that it reflects the final
+    /// state of a burst of alerts. Further calls while that trailing run
+    /// is scheduled are absorbed by it.
+    fn throttle_alert_action(
+        &mut self,
+        interval: Duration,
+        throttle: fn(&mut TermWindow) -> &mut AlertThrottle,
+        action: fn(&mut TermWindow),
+    ) {
+        let state = throttle(self);
+        if state.trailing_scheduled {
             return;
         }
-        let interval = Duration::from_millis(self.config.status_update_interval);
         let now = Instant::now();
-        let due = self
-            .last_alert_status_call
-            .map(|last| last + interval)
-            .unwrap_or(now);
+        let due = state.last_run.map(|last| last + interval).unwrap_or(now);
         if due <= now {
-            self.last_alert_status_call.replace(now);
-            self.schedule_status_update();
+            state.last_run.replace(now);
+            action(self);
             return;
         }
 
-        if let Some(window) = self.window.clone() {
-            self.alert_status_pending = true;
-            promise::spawn::spawn(async move {
-                Timer::at(due).await;
-                window.notify(TermWindowNotif::Apply(Box::new(|term_window| {
-                    term_window.alert_status_pending = false;
-                    term_window.last_alert_status_call.replace(Instant::now());
-                    term_window.schedule_status_update();
-                })));
-            })
-            .detach();
-        }
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        throttle(self).trailing_scheduled = true;
+        promise::spawn::spawn(async move {
+            Timer::at(due).await;
+            window.notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+                let state = throttle(term_window);
+                state.trailing_scheduled = false;
+                state.last_run.replace(Instant::now());
+                action(term_window);
+            })));
+        })
+        .detach();
     }
 
     fn window_contains_pane(&mut self, pane_id: PaneId) -> bool {
