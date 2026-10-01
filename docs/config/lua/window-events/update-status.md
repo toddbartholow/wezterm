@@ -6,6 +6,11 @@ The `update-status` event is emitted periodically (based on the
 interval specified by the [status_update_interval](../config/status_update_interval.md)
 configuration value).
 
+It is also emitted when a pane in the window changes its title, working
+directory or progress. Since some programs change their title many times per
+second, those emissions are limited to one per `status_update_interval`, with
+a final call after the last change so that the status reflects it.
+
 There is no defined return value for the event, but its purpose is to allow
 you the chance to carry out some activity and then ultimately call
 [window:set_right_status](../window/set_right_status.md) or [window:set_left_status](../window/set_left_status.md).

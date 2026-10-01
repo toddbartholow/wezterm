@@ -792,6 +792,18 @@ pub async fn emit_event<'lua>(
     }
 }
 
+/// Returns true if at least one handler is registered for the named event,
+/// so that callers can skip building expensive arguments when nobody is
+/// listening.
+pub fn has_event_handler(lua: &Lua, name: &str) -> mlua::Result<bool> {
+    let decorated_name = format!("wezterm-event-{}", name);
+    let tbl: mlua::Value = lua.named_registry_value(&decorated_name)?;
+    Ok(match tbl {
+        mlua::Value::Table(tbl) => tbl.raw_len() > 0,
+        _ => false,
+    })
+}
+
 pub fn emit_sync_callback<'lua, A>(
     lua: &'lua Lua,
     (name, args): (String, A),

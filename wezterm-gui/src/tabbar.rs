@@ -1,7 +1,8 @@
 use crate::termwindow::{PaneInformation, TabInformation, UIItem, UIItemType};
 use config::{ConfigHandle, TabBarColors};
 use finl_unicode::grapheme_clusters::Graphemes;
-use mlua::FromLua;
+use mlua::{FromLua, IntoLua};
+use std::cell::RefCell;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use termwiz::cell::{unicode_column_width, Cell, CellAttributes};
@@ -54,32 +55,68 @@ struct TitleText {
 /// The lua values that are identical for every `compute_tab_title` call made by
 /// one `TabBarState::new`. Building them once and passing them down keeps
 /// userdata creation proportional to tabs+panes rather than tabs*(tabs+panes).
+/// The config is converted only when it changes; see `tab_title_config`.
 struct TabTitleContext<'lua> {
     lua: &'lua mlua::Lua,
     tabs: mlua::Table<'lua>,
     panes: mlua::Table<'lua>,
+    config: mlua::Value<'lua>,
+}
+
+thread_local! {
+    /// The config most recently converted for format-tab-title. Holding it
+    /// keeps its allocation alive, so a different config can't reuse its
+    /// address and be mistaken for it.
+    static TAB_TITLE_CONFIG: RefCell<Option<ConfigHandle>> = RefCell::new(None);
+}
+const TAB_TITLE_CONFIG_KEY: &str = "wezterm-format-tab-title-config";
+
+/// Converting the config to lua is most of the cost of calling
+/// format-tab-title, and the tab bar is rebuilt on every title change in the
+/// window, so the converted value is kept in the lua registry and reused
+/// until the config (or the lua state, on reload) changes. A handler that
+/// modifies its config argument will see those modifications next time.
+fn tab_title_config<'lua>(
+    lua: &'lua mlua::Lua,
+    config: &ConfigHandle,
+) -> mlua::Result<mlua::Value<'lua>> {
+    let same_config = TAB_TITLE_CONFIG.with(|prior| {
+        prior
+            .borrow()
+            .as_ref()
+            .map(|prior| std::ptr::eq(&**prior, &**config))
+            .unwrap_or(false)
+    });
+    if same_config {
+        let value: mlua::Value = lua.named_registry_value(TAB_TITLE_CONFIG_KEY)?;
+        if !value.is_nil() {
+            return Ok(value);
+        }
+    }
+
+    let value = (**config).clone().into_lua(lua)?;
+    lua.set_named_registry_value(TAB_TITLE_CONFIG_KEY, value.clone())?;
+    TAB_TITLE_CONFIG.with(|prior| prior.borrow_mut().replace(config.clone()));
+    Ok(value)
 }
 
 fn call_format_tab_title(
     ctx: &TabTitleContext,
     tab: &TabInformation,
-    config: &ConfigHandle,
     hover: bool,
     tab_max_width: usize,
 ) -> Option<TitleText> {
     let lua = ctx.lua;
     match (|| -> anyhow::Result<Option<TitleText>> {
-        let tabs = ctx.tabs.clone();
-        let panes = ctx.panes.clone();
         let v = config::lua::emit_sync_callback(
             lua,
             (
                 "format-tab-title".to_string(),
                 (
                     tab.clone(),
-                    tabs,
-                    panes,
-                    (**config).clone(),
+                    ctx.tabs.clone(),
+                    ctx.panes.clone(),
+                    ctx.config.clone(),
                     hover,
                     tab_max_width,
                 ),
@@ -211,7 +248,7 @@ fn compute_tab_title(
     hover: bool,
     tab_max_width: usize,
 ) -> TitleText {
-    let title = ctx.and_then(|ctx| call_format_tab_title(ctx, tab, config, hover, tab_max_width));
+    let title = ctx.and_then(|ctx| call_format_tab_title(ctx, tab, hover, tab_max_width));
 
     match title {
         Some(title) => title,
@@ -433,16 +470,20 @@ impl TabBarState {
         left_status: &str,
         right_status: &str,
     ) -> Self {
-        // Marshal every tab and pane into lua once here, rather than once per
-        // compute_tab_title call below.
+        // Marshal every tab, every pane and the config into lua once here,
+        // rather than once per compute_tab_title call below, and not at all
+        // when there is no format-tab-title handler to receive them.
         let built = config::run_immediate_with_lua_config(|lua| {
             let ctx = match lua.as_deref() {
-                Some(lua) => Some(TabTitleContext {
-                    lua,
-                    tabs: lua.create_sequence_from(tab_info.iter().cloned())?,
-                    panes: lua.create_sequence_from(pane_info.iter().cloned())?,
-                }),
-                None => None,
+                Some(lua) if config::lua::has_event_handler(lua, "format-tab-title")? => {
+                    Some(TabTitleContext {
+                        lua,
+                        tabs: lua.create_sequence_from(tab_info.iter().cloned())?,
+                        panes: lua.create_sequence_from(pane_info.iter().cloned())?,
+                        config: tab_title_config(lua, config)?,
+                    })
+                }
+                _ => None,
             };
             Ok(Self::build(
                 ctx.as_ref(),
