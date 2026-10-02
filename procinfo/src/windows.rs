@@ -3,7 +3,7 @@
 use super::*;
 use ntapi::ntpebteb::PEB;
 use ntapi::ntpsapi::{
-    NtQueryInformationProcess, ProcessBasicInformation, ProcessWow64Information,
+    NtGetNextProcess, NtQueryInformationProcess, ProcessBasicInformation, ProcessWow64Information,
     PROCESS_BASIC_INFORMATION,
 };
 use ntapi::ntrtl::RTL_USER_PROCESS_PARAMETERS;
@@ -13,13 +13,26 @@ use std::mem::MaybeUninit;
 use std::os::windows::ffi::OsStringExt;
 use winapi::shared::minwindef::{DWORD, FILETIME, LPVOID, MAX_PATH};
 use winapi::shared::ntdef::{FALSE, NT_SUCCESS};
+use winapi::shared::ntstatus::STATUS_PENDING;
 use winapi::um::handleapi::CloseHandle;
 use winapi::um::memoryapi::ReadProcessMemory;
 use winapi::um::processthreadsapi::{GetCurrentProcessId, GetProcessTimes, OpenProcess};
 use winapi::um::shellapi::CommandLineToArgvW;
 use winapi::um::tlhelp32::*;
 use winapi::um::winbase::{LocalFree, QueryFullProcessImageNameW};
-use winapi::um::winnt::{HANDLE, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
+use winapi::um::winnt::{
+    HANDLE, PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+};
+
+/// A process and its parent, as reported by one of the
+/// enumeration methods below
+struct ProcEntry {
+    pid: u32,
+    ppid: u32,
+    /// The image name from a toolhelp snapshot. Only used when we
+    /// cannot open the process to ask for its full path.
+    exe_file: PathBuf,
+}
 
 /// Manages a Toolhelp32 snapshot handle
 struct Snapshot(HANDLE);
@@ -41,9 +54,16 @@ impl Snapshot {
         }
     }
 
-    pub fn entries() -> Vec<PROCESSENTRY32W> {
+    pub fn entries() -> Vec<ProcEntry> {
         match Self::new() {
-            Some(snapshot) => snapshot.iter().collect(),
+            Some(snapshot) => snapshot
+                .iter()
+                .map(|info| ProcEntry {
+                    pid: info.th32ProcessID,
+                    ppid: info.th32ParentProcessID,
+                    exe_file: wstr_to_path(&info.szExeFile),
+                })
+                .collect(),
             None => vec![],
         }
     }
@@ -80,6 +100,51 @@ impl<'a> Iterator for ProcIter<'a> {
     }
 }
 
+/// Lists the processes that we are able to open, along with their parents.
+///
+/// A toolhelp snapshot asks the kernel for every process and every thread
+/// on the system, which takes 15ms or more on a busy machine. We only need
+/// the pid and parent pid of processes that we can inspect, and walking
+/// process handles with NtGetNextProcess gets those in about 1ms.
+/// Processes that we cannot open at all (services running as other
+/// accounts, protected processes) are left out.
+fn openable_process_entries() -> Vec<ProcEntry> {
+    let mut entries = vec![];
+    let mut prev: Option<ProcHandle> = None;
+    loop {
+        let mut next: HANDLE = std::ptr::null_mut();
+        let status = unsafe {
+            NtGetNextProcess(
+                prev.as_ref().map_or(std::ptr::null_mut(), |p| p.proc),
+                PROCESS_QUERY_LIMITED_INFORMATION,
+                0,
+                0,
+                &mut next,
+            )
+        };
+        if !NT_SUCCESS(status) {
+            break;
+        }
+        let proc = ProcHandle { pid: 0, proc: next };
+        if let Some(info) = proc.get_basic_info() {
+            // The walk also yields processes that have exited but are
+            // still referenced by an open handle somewhere; a toolhelp
+            // snapshot would not list them, so skip them here too.
+            if info.ExitStatus == STATUS_PENDING {
+                entries.push(ProcEntry {
+                    pid: info.UniqueProcessId as usize as u32,
+                    ppid: info.InheritedFromUniqueProcessId as usize as u32,
+                    exe_file: PathBuf::new(),
+                });
+            }
+        }
+        // Dropping the previous handle closes it; the walk continues
+        // from the one we just opened.
+        prev = Some(proc);
+    }
+    entries
+}
+
 fn wstr_to_path(slice: &[u16]) -> PathBuf {
     match slice.iter().position(|&c| c == 0) {
         Some(nul) => OsString::from_wide(&slice[..nul]),
@@ -106,12 +171,15 @@ struct ProcHandle {
 
 impl ProcHandle {
     pub fn new(pid: u32) -> Option<Self> {
+        Self::with_access(pid, PROCESS_QUERY_INFORMATION | PROCESS_VM_READ)
+    }
+
+    pub fn with_access(pid: u32, options: DWORD) -> Option<Self> {
         if pid == unsafe { GetCurrentProcessId() } {
             // Avoid the potential for deadlock if we're examining ourselves
             log::trace!("ProcHandle::new({}): skip because it is my own pid", pid);
             return None;
         }
-        let options = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ;
         log::trace!("ProcHandle::new({}): OpenProcess", pid);
         let handle = unsafe { OpenProcess(options, FALSE as _, pid) };
         log::trace!("ProcHandle::new({}): OpenProcess -> {:?}", pid, handle);
@@ -358,23 +426,31 @@ impl LocalProcessInfo {
     }
 
     pub fn with_root_pid(pid: u32) -> Option<Self> {
-        log::trace!("LocalProcessInfo::with_root_pid({}), getting snapshot", pid);
-        let procs = Snapshot::entries();
-        log::trace!("Got snapshot");
+        log::trace!(
+            "LocalProcessInfo::with_root_pid({}), listing processes",
+            pid
+        );
+        let mut procs = openable_process_entries();
+        if !procs.iter().any(|info| info.pid == pid) {
+            // We can't open the root, so the cheap listing can't tell
+            // us about it. Fall back to a full snapshot, which lists
+            // every process whether we can open it or not.
+            log::trace!("{} is not openable, getting snapshot", pid);
+            procs = Snapshot::entries();
+        }
+        log::trace!("Got {} processes", procs.len());
 
         fn build_proc(
-            info: &PROCESSENTRY32W,
-            procs: &[PROCESSENTRY32W],
+            info: &ProcEntry,
+            procs: &[ProcEntry],
             visited: &mut HashSet<u32>,
         ) -> LocalProcessInfo {
             let mut children = HashMap::new();
 
             for kid in procs {
-                if kid.th32ParentProcessID == info.th32ProcessID
-                    && !visited.contains(&kid.th32ProcessID)
-                {
-                    visited.insert(kid.th32ProcessID);
-                    children.insert(kid.th32ProcessID, build_proc(kid, procs, visited));
+                if kid.ppid == info.pid && !visited.contains(&kid.pid) {
+                    visited.insert(kid.pid);
+                    children.insert(kid.pid, build_proc(kid, procs, visited));
                 }
             }
 
@@ -384,7 +460,7 @@ impl LocalProcessInfo {
             let mut argv = vec![];
             let mut console = 0;
 
-            if let Some(proc) = ProcHandle::new(info.th32ProcessID) {
+            if let Some(proc) = ProcHandle::new(info.pid) {
                 if let Some(exe) = proc.executable() {
                     executable.replace(exe);
                 }
@@ -396,17 +472,24 @@ impl LocalProcessInfo {
                 if let Some(start) = proc.start_time() {
                     start_time = start;
                 }
+            } else if let Some(proc) =
+                ProcHandle::with_access(info.pid, PROCESS_QUERY_LIMITED_INFORMATION)
+            {
+                // We can't read its memory (eg: it is elevated and we
+                // are not), but we can still learn its path and age.
+                executable = proc.executable();
+                start_time = proc.start_time().unwrap_or(0);
             }
 
-            let executable = executable.unwrap_or_else(|| wstr_to_path(&info.szExeFile));
+            let executable = executable.unwrap_or_else(|| info.exe_file.clone());
             let name = match executable.file_name() {
                 Some(name) => name.to_string_lossy().into_owned(),
                 None => String::new(),
             };
 
             LocalProcessInfo {
-                pid: info.th32ProcessID,
-                ppid: info.th32ParentProcessID,
+                pid: info.pid,
+                ppid: info.ppid,
                 name,
                 executable,
                 cwd,
@@ -418,7 +501,7 @@ impl LocalProcessInfo {
             }
         }
 
-        if let Some(info) = procs.iter().find(|info| info.th32ProcessID == pid) {
+        if let Some(info) = procs.iter().find(|info| info.pid == pid) {
             let mut visited = HashSet::new();
             visited.insert(pid);
             Some(build_proc(info, &procs, &mut visited))

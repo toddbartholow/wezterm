@@ -20,9 +20,11 @@ ntapi.workspace = true
 winapi = { workspace=true, features = [
     "handleapi",
     "memoryapi",
+    "ntstatus",
     "psapi",
     "processthreadsapi",
     "shellapi",
     "tlhelp32",
+    "winbase",
 ]}
 
