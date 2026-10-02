@@ -332,6 +332,87 @@ impl super::TermWindow {
         self.dragging.replace((item, start_event));
     }
 
+    /// Reorders the tab being dragged so that it follows the mouse
+    /// along the tab bar.
+    fn drag_tab(
+        &mut self,
+        mut item: UIItem,
+        tab_idx: usize,
+        start_event: MouseEvent,
+        event: MouseEvent,
+        context: &dyn WindowOps,
+    ) {
+        let mux = Mux::get();
+        let active_idx = match mux.get_window(self.mux_window_id) {
+            Some(window) => window.get_active_tab_idx(),
+            None => return,
+        };
+        if active_idx != tab_idx {
+            // move_tab moves the active tab; if something else became
+            // active mid-drag, stop rather than move the wrong tab
+            return;
+        }
+
+        // (tab_idx, x, width) as of the last paint
+        let tabs: Vec<(usize, usize, usize)> = self
+            .ui_items
+            .iter()
+            .filter_map(|item| match item.item_type {
+                UIItemType::TabBar(TabBarItem::Tab { tab_idx, .. }) => {
+                    Some((tab_idx, item.x, item.width))
+                }
+                _ => None,
+            })
+            .collect();
+        let dragged_width = match tabs.iter().find(|(idx, _, _)| *idx == tab_idx) {
+            Some((_, _, width)) => *width,
+            None => {
+                // The tab bar hasn't been repainted since the last move
+                self.dragging.replace((item, start_event));
+                return;
+            }
+        };
+
+        let mouse_x = event.coords.x.max(0) as usize;
+
+        // Only move once the mouse is over the other tab and would also be
+        // over the dragged tab in its new spot. Otherwise a wide tab
+        // swapping with a narrow one would flip back on the next event.
+        let target = if let Some((target, _, _)) = tabs
+            .iter()
+            .filter(|(idx, x, width)| {
+                *idx > tab_idx && mouse_x >= (*x).max((x + width).saturating_sub(dragged_width))
+            })
+            .max_by_key(|(idx, _, _)| *idx)
+        {
+            Some(*target)
+        } else if let Some((target, _, _)) = tabs
+            .iter()
+            .filter(|(idx, x, width)| {
+                *idx < tab_idx && mouse_x < (x + width).min(x + dragged_width)
+            })
+            .min_by_key(|(idx, _, _)| *idx)
+        {
+            Some(*target)
+        } else {
+            None
+        };
+
+        if let Some(target) = target {
+            if self.move_tab(target).is_ok() {
+                item.item_type = UIItemType::TabBar(TabBarItem::Tab {
+                    tab_idx: target,
+                    active: true,
+                });
+                // The tab positions are stale until the next paint
+                self.ui_items
+                    .retain(|item| !matches!(item.item_type, UIItemType::TabBar(_)));
+                context.invalidate();
+            }
+        }
+        self.dragging.replace((item, start_event));
+    }
+
     fn drag_ui_item(
         &mut self,
         item: UIItem,
@@ -347,6 +428,9 @@ impl super::TermWindow {
             }
             UIItemType::ScrollThumb => {
                 self.drag_scroll_thumb(item, start_event, event, context);
+            }
+            UIItemType::TabBar(TabBarItem::Tab { tab_idx, .. }) => {
+                self.drag_tab(item, tab_idx, start_event, event, context);
             }
             _ => {
                 log::error!("drag not implemented for {:?}", item);
@@ -465,6 +549,9 @@ impl super::TermWindow {
                     self.activate_tab(tab_idx as isize).ok();
                     if self.last_mouse_click.as_ref().map(|c| c.streak) == Some(2) {
                         self.show_rename_tab_prompt();
+                    } else if let Some(ui_item) = self.last_ui_item.clone() {
+                        // Potentially starting a drag to reorder the tab
+                        self.dragging.replace((ui_item, event.clone()));
                     }
                 }
                 TabBarItem::NewTabButton { .. } => {
