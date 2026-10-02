@@ -2407,6 +2407,31 @@ impl TermWindow {
         promise::spawn::spawn(future).detach();
     }
 
+    /// Prompts for a new title for the active tab, starting from the
+    /// title it shows now: its own title if it has one, otherwise that
+    /// of its active pane.
+    pub fn show_rename_tab_prompt(&mut self) {
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+
+        let mut current_title = tab.get_title();
+        if current_title.is_empty() {
+            if let Some(pane) = tab.get_active_pane() {
+                current_title = pane.get_title();
+            }
+        }
+
+        let tab_id = tab.tab_id();
+        let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
+            crate::overlay::prompt::show_rename_tab_overlay(term, tab_id, current_title)
+        });
+        self.assign_overlay(tab_id, overlay);
+        promise::spawn::spawn(future).detach();
+    }
+
     fn show_confirmation(&mut self, args: &Confirmation) {
         let mux = Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
@@ -3243,6 +3268,7 @@ impl TermWindow {
                 self.set_modal(Rc::new(modal));
             }
             PromptInputLine(args) => self.show_prompt_input_line(args),
+            RenameTab => self.show_rename_tab_prompt(),
             InputSelector(args) => self.show_input_selector(args),
             Confirmation(args) => self.show_confirmation(args),
         };

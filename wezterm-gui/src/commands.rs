@@ -1299,6 +1299,16 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Window", "Move Tab"],
             icon: Some("fa_long_arrow_right"),
         },
+        RenameTab => CommandDef {
+            brief: "Rename tab".into(),
+            doc: "Prompts for a new title for the current tab. \
+            An empty title makes the tab show its program's title again"
+                .into(),
+            keys: vec![],
+            args: &[ArgType::ActiveTab],
+            menubar: &["Window"],
+            icon: Some("md_rename_box"),
+        },
         MoveTabRelative(n) => {
             let (direction, amount, icon) = if *n < 0 {
                 ("left", (-n).to_string(), "md_chevron_double_left")
@@ -2124,6 +2134,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ActivateWindowRelative(1),
         MoveTabRelative(-1),
         MoveTabRelative(1),
+        RenameTab,
         AdjustPaneSize(PaneDirection::Left, 1),
         AdjustPaneSize(PaneDirection::Right, 1),
         AdjustPaneSize(PaneDirection::Up, 1),
