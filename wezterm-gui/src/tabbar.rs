@@ -30,7 +30,12 @@ pub enum TabBarItem {
     None,
     LeftStatus,
     RightStatus,
-    Tab { tab_idx: usize, active: bool },
+    Tab {
+        tab_idx: usize,
+        active: bool,
+        /// The tab is being dragged to a new position in the tab bar
+        dragging: bool,
+    },
     NewTabButton,
     WindowButton(IntegratedTitleButton),
 }
@@ -460,9 +465,11 @@ impl TabBarState {
     /// mouse_x is some if the mouse is on the same row as the tab bar.
     /// title_width is the total number of cell columns in the window.
     /// window allows access to the tabs associated with the window.
+    /// dragging_active_tab is true while the active tab is being dragged.
     pub fn new(
         title_width: usize,
         mouse_x: Option<usize>,
+        dragging_active_tab: bool,
         tab_info: &[TabInformation],
         pane_info: &[PaneInformation],
         colors: Option<&TabBarColors>,
@@ -489,6 +496,7 @@ impl TabBarState {
                 ctx.as_ref(),
                 title_width,
                 mouse_x,
+                dragging_active_tab,
                 tab_info,
                 colors,
                 config,
@@ -505,6 +513,7 @@ impl TabBarState {
                     None,
                     title_width,
                     mouse_x,
+                    dragging_active_tab,
                     tab_info,
                     colors,
                     config,
@@ -519,6 +528,7 @@ impl TabBarState {
         title_ctx: Option<&TabTitleContext>,
         title_width: usize,
         mouse_x: Option<usize>,
+        dragging_active_tab: bool,
         tab_info: &[TabInformation],
         colors: Option<&TabBarColors>,
         config: &ConfigHandle,
@@ -528,6 +538,7 @@ impl TabBarState {
         let colors = colors.cloned().unwrap_or_else(TabBarColors::default);
 
         let active_cell_attrs = colors.active_tab().as_cell_attributes();
+        let dragging_cell_attrs = active_cell_attrs.clone().set_reverse(true).clone();
         let inactive_hover_attrs = colors.inactive_tab_hover().as_cell_attributes();
         let inactive_cell_attrs = colors.inactive_tab().as_cell_attributes();
         let new_tab_hover_attrs = colors.new_tab_hover().as_cell_attributes();
@@ -634,6 +645,7 @@ impl TabBarState {
         for (tab_idx, tab_title) in tab_titles.iter().enumerate() {
             let tab_title_len = tab_title.len.min(tab_width_max);
             let active = tab_idx == active_tab_no;
+            let dragging = active && dragging_active_tab;
             let hover = !active && is_tab_hover(mouse_x, x, tab_title_len);
 
             // Recompute the title so that it factors in both the hover state
@@ -641,7 +653,9 @@ impl TabBarState {
             let tab_title =
                 compute_tab_title(title_ctx, &tab_info[tab_idx], config, hover, tab_title_len);
 
-            let cell_attrs = if active {
+            let cell_attrs = if dragging {
+                &dragging_cell_attrs
+            } else if active {
                 &active_cell_attrs
             } else if hover {
                 &inactive_hover_attrs
@@ -671,7 +685,11 @@ impl TabBarState {
             let width = tab_line.len();
 
             items.push(TabEntry {
-                item: TabBarItem::Tab { tab_idx, active },
+                item: TabBarItem::Tab {
+                    tab_idx,
+                    active,
+                    dragging,
+                },
                 title,
                 x: tab_start_idx,
                 width,

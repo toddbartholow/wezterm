@@ -461,6 +461,9 @@ pub struct TermWindow {
 
     ui_items: Vec<UIItem>,
     dragging: Option<(UIItem, MouseEvent)>,
+    /// The active tab is being dragged to reorder it; the mouse has moved
+    /// far enough from the press on the tab that this isn't just a click.
+    tab_drag_active: bool,
 
     modal: RefCell<Option<Rc<dyn Modal>>>,
 
@@ -808,6 +811,7 @@ impl TermWindow {
             semantic_zones: HashMap::new(),
             ui_items: vec![],
             dragging: None,
+            tab_drag_active: false,
             last_ui_item: None,
             is_click_to_focus_window: false,
             key_table_state: KeyTableState::default(),
@@ -2073,6 +2077,7 @@ impl TermWindow {
             } else {
                 None
             },
+            self.tab_drag_active,
             &tabs,
             &panes,
             self.config.resolved_palette.tab_bar.as_ref(),

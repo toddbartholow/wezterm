@@ -125,6 +125,11 @@ impl super::TermWindow {
             WMEK::Release(ref press) => {
                 self.current_mouse_capture = None;
                 self.current_mouse_buttons.retain(|p| p != press);
+                if press == &MousePress::Left && std::mem::take(&mut self.tab_drag_active) {
+                    // Completed a tab drag; draw the tab normally again
+                    self.update_title_post_status();
+                    context.set_cursor(Some(CursorIcon::Default));
+                }
                 if press == &MousePress::Left && self.window_drag_position.take().is_some() {
                     // Completed a window drag
                     return;
@@ -353,6 +358,22 @@ impl super::TermWindow {
             return;
         }
 
+        if !self.tab_drag_active {
+            // Wait until the mouse has moved a little, so that a click with
+            // a slightly unsteady hand doesn't look like a drag
+            let threshold = (self.render_metrics.cell_size.width / 2).max(1);
+            if (event.coords.x - start_event.coords.x).abs() < threshold
+                && (event.coords.y - start_event.coords.y).abs() < threshold
+            {
+                self.dragging.replace((item, start_event));
+                return;
+            }
+            self.tab_drag_active = true;
+            // Rebuild the tab bar so that it highlights the dragged tab
+            self.update_title_post_status();
+        }
+        context.set_cursor(Some(CursorIcon::Move));
+
         // (tab_idx, x, width) as of the last paint
         let tabs: Vec<(usize, usize, usize)> = self
             .ui_items
@@ -403,6 +424,7 @@ impl super::TermWindow {
                 item.item_type = UIItemType::TabBar(TabBarItem::Tab {
                     tab_idx: target,
                     active: true,
+                    dragging: true,
                 });
                 // The tab positions are stale until the next paint
                 self.ui_items

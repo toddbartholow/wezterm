@@ -171,7 +171,9 @@ impl crate::TermWindow {
                     bg: new_tab_hover.bg_color.to_linear().into(),
                     text: new_tab_hover.fg_color.to_linear().into(),
                 })),
-                TabBarItem::Tab { active, .. } if active => element
+                TabBarItem::Tab {
+                    active, dragging, ..
+                } if active => element
                     .vertical_align(tab_vertical_alignment)
                     .item_type(UIItemType::TabBar(item.item.clone()))
                     .margin(if is_bottom {
@@ -227,20 +229,16 @@ impl crate::TermWindow {
                             bottom_right: SizedPoly::none(),
                         }
                     }))
-                    .colors(ElementColors {
-                        border: BorderColor::new(
-                            bg_color
-                                .unwrap_or_else(|| active_tab.bg_color.into())
-                                .to_linear(),
-                        ),
-                        bg: bg_color
-                            .unwrap_or_else(|| active_tab.bg_color.into())
-                            .to_linear()
-                            .into(),
-                        text: fg_color
-                            .unwrap_or_else(|| active_tab.fg_color.into())
-                            .to_linear()
-                            .into(),
+                    .colors({
+                        let bg = bg_color.unwrap_or_else(|| active_tab.bg_color.into());
+                        let fg = fg_color.unwrap_or_else(|| active_tab.fg_color.into());
+                        // A tab that is being dragged is drawn in reverse video
+                        let (bg, fg) = if dragging { (fg, bg) } else { (bg, fg) };
+                        ElementColors {
+                            border: BorderColor::new(bg.to_linear()),
+                            bg: bg.to_linear().into(),
+                            text: fg.to_linear().into(),
+                        }
                     }),
                 TabBarItem::Tab { .. } => element
                     .vertical_align(tab_vertical_alignment)
@@ -404,7 +402,9 @@ impl crate::TermWindow {
                         right_eles.push(item_to_elem(item))
                     }
                 }
-                TabBarItem::Tab { tab_idx, active } => {
+                TabBarItem::Tab {
+                    tab_idx, active, ..
+                } => {
                     let mut elem = item_to_elem(item);
                     elem.max_width = Some(Dimension::Pixels(max_tab_width));
                     elem.content = match elem.content {
