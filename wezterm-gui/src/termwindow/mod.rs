@@ -217,6 +217,8 @@ pub struct TabInformation {
     pub active_pane: Option<PaneInformation>,
     pub window_id: MuxWindowId,
     pub tab_title: String,
+    /// True if any pane in the tab needs attention
+    pub needs_attention: bool,
 }
 
 impl UserData for TabInformation {
@@ -225,6 +227,7 @@ impl UserData for TabInformation {
         fields.add_field_method_get("tab_index", |_, this| Ok(this.tab_index));
         fields.add_field_method_get("is_active", |_, this| Ok(this.is_active));
         fields.add_field_method_get("is_last_active", |_, this| Ok(this.is_last_active));
+        fields.add_field_method_get("needs_attention", |_, this| Ok(this.needs_attention));
         fields.add_field_method_get("active_pane", |_, this| {
             if let Some(pane) = &this.active_pane {
                 Ok(Some(pane.clone()))
@@ -264,6 +267,7 @@ pub struct PaneInformation {
     pub is_active: bool,
     pub is_zoomed: bool,
     pub has_unseen_output: bool,
+    pub needs_attention: bool,
     pub left: usize,
     pub top: usize,
     pub width: usize,
@@ -282,6 +286,7 @@ impl UserData for PaneInformation {
         fields.add_field_method_get("is_active", |_, this| Ok(this.is_active));
         fields.add_field_method_get("is_zoomed", |_, this| Ok(this.is_zoomed));
         fields.add_field_method_get("has_unseen_output", |_, this| Ok(this.has_unseen_output));
+        fields.add_field_method_get("needs_attention", |_, this| Ok(this.needs_attention));
         fields.add_field_method_get("left", |_, this| Ok(this.left));
         fields.add_field_method_get("top", |_, this| Ok(this.top));
         fields.add_field_method_get("width", |_, this| Ok(this.width));
@@ -1270,6 +1275,8 @@ impl TermWindow {
 
                     log::trace!("Ding! (this is the bell) in pane {}", pane_id);
                     self.emit_window_event("bell", Some(pane_id));
+                    // A bell in a background pane marks its tab as needing attention
+                    self.update_title_for_alert();
 
                     let mut per_pane = self.pane_state(pane_id);
                     per_pane.bell_start.replace(Instant::now());
@@ -1277,8 +1284,14 @@ impl TermWindow {
                 }
                 MuxNotification::Alert {
                     alert: Alert::ToastNotification { .. },
-                    ..
-                } => {}
+                    pane_id,
+                } => {
+                    // The toast itself is shown by the frontend; here the tab
+                    // bar is refreshed in case the pane now needs attention
+                    if self.window_contains_pane(pane_id) {
+                        self.update_title_for_alert();
+                    }
+                }
                 MuxNotification::TabAddedToWindow {
                     window_id: _,
                     tab_id,
@@ -1491,7 +1504,8 @@ impl TermWindow {
                     | Alert::IconTitleChanged(_)
                     | Alert::Progress(_)
                     | Alert::SetUserVar { .. }
-                    | Alert::Bell,
+                    | Alert::Bell
+                    | Alert::ToastNotification { .. },
             }
             | MuxNotification::PaneFocused(pane_id)
             | MuxNotification::PaneRemoved(pane_id)
@@ -1539,11 +1553,7 @@ impl TermWindow {
                     return true;
                 }
             }
-            MuxNotification::Alert {
-                alert: Alert::ToastNotification { .. },
-                ..
-            }
-            | MuxNotification::AssignClipboard { .. }
+            MuxNotification::AssignClipboard { .. }
             | MuxNotification::SaveToDownloads { .. }
             | MuxNotification::WindowCreated(_)
             | MuxNotification::ActiveWorkspaceChanged(_)
@@ -3583,6 +3593,7 @@ impl TermWindow {
             is_active: pos.is_active,
             is_zoomed: pos.is_zoomed,
             has_unseen_output: pos.pane.has_unseen_output(),
+            needs_attention: pos.pane.needs_attention(),
             left: pos.left,
             top: pos.top,
             width: pos.width,
@@ -3619,6 +3630,7 @@ impl TermWindow {
                         .unwrap_or(false),
                     window_id: self.mux_window_id,
                     tab_title: tab.get_title(),
+                    needs_attention: panes.iter().any(|p| p.pane.needs_attention()),
                     active_pane: panes
                         .iter()
                         .find(|p| p.is_active)

@@ -395,6 +395,9 @@ pub struct TerminalState {
     /// seqno when we last emitted Alert::OutputSinceFocusLost
     lost_focus_alerted_seqno: SequenceNo,
     focused: bool,
+    /// Set when the bell rings or a notification is posted while the
+    /// terminal doesn't have focus; cleared when it gains focus.
+    needs_attention: bool,
 
     /// True if lines should be marked as bidi-enabled, and thus
     /// have the renderer apply the bidi algorithm.
@@ -592,6 +595,7 @@ impl TerminalState {
             lost_focus_seqno: seqno,
             lost_focus_alerted_seqno: seqno,
             focused: true,
+            needs_attention: false,
             bidi_enabled: None,
             bidi_hint: None,
             progress: Progress::default(),
@@ -911,6 +915,21 @@ impl TerminalState {
         self.focused = focused;
         if !focused {
             self.lost_focus_seqno = self.seqno;
+        } else {
+            self.needs_attention = false;
+        }
+    }
+
+    /// Returns true if the bell rang or a notification was posted since
+    /// the terminal lost focus, meaning the program is waiting on the user.
+    pub fn needs_attention(&self) -> bool {
+        self.needs_attention
+    }
+
+    /// Notes that the program wants the user, if they aren't looking
+    pub(crate) fn request_attention(&mut self) {
+        if !self.focused {
+            self.needs_attention = true;
         }
     }
 

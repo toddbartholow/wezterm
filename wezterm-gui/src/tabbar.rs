@@ -286,6 +286,18 @@ fn compute_tab_title(
                     title = format!("{}{classic_spacing}", title);
                 }
 
+                if tab.needs_attention {
+                    // The program rang the bell or posted a notification
+                    // while nobody was looking at it
+                    let graphic = "\u{25cf} ".to_string();
+                    len += unicode_column_width(&graphic, None);
+                    items.push(FormatItem::Foreground(FormatColor::AnsiColor(
+                        AnsiColor::Yellow,
+                    )));
+                    items.push(FormatItem::Text(graphic));
+                    items.push(FormatItem::Foreground(FormatColor::Default));
+                }
+
                 match pane.progress {
                     Progress::None => {}
                     Progress::Percentage(pct) | Progress::Error(pct) => {

@@ -449,6 +449,7 @@ impl<'a> Performer<'a> {
             ControlCode::IND => self.c1_index(),
             ControlCode::NEL => self.c1_nel(),
             ControlCode::Bell => {
+                self.request_attention();
                 if let Some(handler) = self.alert_handler.as_mut() {
                     handler.alert(Alert::Bell);
                 } else {
@@ -906,6 +907,7 @@ impl<'a> Performer<'a> {
             ) => {}
 
             OperatingSystemCommand::SystemNotification(message) => {
+                self.request_attention();
                 if let Some(handler) = self.alert_handler.as_mut() {
                     handler.alert(Alert::ToastNotification {
                         title: None,
@@ -928,6 +930,7 @@ impl<'a> Performer<'a> {
                             return;
                         }
                     };
+                    self.request_attention();
                     if let Some(handler) = self.alert_handler.as_mut() {
                         handler.alert(Alert::ToastNotification {
                             title,

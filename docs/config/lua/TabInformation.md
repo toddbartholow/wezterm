@@ -16,5 +16,6 @@ The `TabInformation` struct contains the following fields:
 * `window_id` - the ID of the window that contains this tab {{since('20220807-113146-c2fee766', inline=True)}}
 * `window_title` - the title of the window that contains this tab {{since('20220807-113146-c2fee766', inline=True)}}
 * `tab_title` - the title of the tab {{since('20220807-113146-c2fee766', inline=True)}}
+* `needs_attention` - is true if any pane in the tab [needs attention](pane/needs_attention.md). The default tab bar marks such tabs with a yellow dot. {{since('nightly', inline=True)}}
 
 

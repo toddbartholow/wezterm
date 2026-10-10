@@ -1378,3 +1378,43 @@ fn test_hyperlinks() {
         Compare::TEXT | Compare::ATTRS,
     );
 }
+
+#[test]
+fn test_needs_attention() {
+    let mut term = TestTerm::new(5, 10, 0);
+
+    // The bell doesn't need attention while the user is looking
+    term.print("\x07");
+    assert!(!term.needs_attention());
+
+    // Ordinary output from a background pane doesn't either
+    term.focus_changed(false);
+    term.print("busy");
+    assert!(!term.needs_attention());
+
+    term.print("\x07");
+    assert!(term.needs_attention());
+
+    // Looking at the pane clears it
+    term.focus_changed(true);
+    assert!(!term.needs_attention());
+
+    // A BEL that terminates an OSC sequence isn't a bell
+    term.focus_changed(false);
+    term.print("\x1b]0;title\x07");
+    assert!(!term.needs_attention());
+
+    // Notifications: OSC 9 and OSC 777;notify
+    term.print("\x1b]9;done\x1b\\");
+    assert!(term.needs_attention());
+    term.focus_changed(true);
+    term.focus_changed(false);
+    term.print("\x1b]777;notify;title;body\x1b\\");
+    assert!(term.needs_attention());
+
+    // OSC 9;4 progress reports are not notifications
+    term.focus_changed(true);
+    term.focus_changed(false);
+    term.print("\x1b]9;4;3\x1b\\");
+    assert!(!term.needs_attention());
+}
