@@ -3290,6 +3290,16 @@ impl TermWindow {
         // handler that can bypass the normal `open_url` functionality.
         if let Some(link) = self.current_highlight.as_ref().cloned() {
             let window = GuiWin::new(self);
+
+            // Links to files may be relative to the pane's working directory
+            let file_link = if link.uri().starts_with("file:") {
+                let cwd = pane
+                    .get_current_working_dir(CachePolicy::AllowStale)
+                    .and_then(|url| url.to_file_path().ok());
+                Some((cwd, self.config.file_link_editor.clone()))
+            } else {
+                None
+            };
             let pane = MuxPane(pane.pane_id());
 
             async fn open_uri(
@@ -3297,6 +3307,7 @@ impl TermWindow {
                 window: GuiWin,
                 pane: MuxPane,
                 link: String,
+                file_link: Option<(Option<std::path::PathBuf>, Option<Vec<String>>)>,
             ) -> anyhow::Result<()> {
                 let default_click = match lua {
                     Some(lua) => {
@@ -3312,13 +3323,29 @@ impl TermWindow {
                 };
                 if default_click {
                     log::info!("clicking {}", link);
+                    if let Some((cwd, editor)) = file_link {
+                        let resolved = crate::filelink::resolve_file_link(
+                            &link,
+                            cwd.as_deref(),
+                            &config::HOME_DIR,
+                            |path| path.exists(),
+                        );
+                        if let Some(file) = resolved {
+                            crate::filelink::open_file_link(&file, editor.as_deref());
+                            return Ok(());
+                        }
+                        if crate::filelink::is_text_path_link(&link) {
+                            log::warn!("{} does not name an existing file", link);
+                            return Ok(());
+                        }
+                    }
                     wezterm_open_url::open_url(&link);
                 }
                 Ok(())
             }
 
             promise::spawn::spawn(config::with_lua_config_on_main_thread(move |lua| {
-                open_uri(lua, window, pane, link.uri().to_string())
+                open_uri(lua, window, pane, link.uri().to_string(), file_link)
             }))
             .detach();
         }

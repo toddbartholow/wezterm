@@ -76,8 +76,19 @@ config.hyperlink_rules = {
     regex = '\\b\\w+@[\\w-]+(\\.[\\w-]+)+\\b',
     format = 'mailto:$0',
   },
+  -- file paths such as src/main.rs:12:5 (pattern abbreviated here; use
+  -- wezterm.default_hyperlink_rules() to get the full rule)
+  {
+    regex = '...',
+    format = 'file:$0',
+  },
 }
 ```
+
+A `file:` link that isn't a `file://` URL holds a path as it appeared in the
+terminal. When clicked, a relative path is resolved against the pane's working
+directory and the file is opened with
+[file_link_editor](file_link_editor.md).
 
 !!! note
     In quoted Lua string literals the backslash character must be

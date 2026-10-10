@@ -279,6 +279,12 @@ pub struct Config {
     #[dynamic(default = "default_hyperlink_rules")]
     pub hyperlink_rules: Vec<hyperlink::Rule>,
 
+    /// The command used to open clicked links to files, with `{path}`,
+    /// `{line}` and `{column}` replaced by the location. When unset,
+    /// files are opened with the system's default application.
+    #[dynamic(default)]
+    pub file_link_editor: Option<Vec<String>>,
+
     /// What to set the TERM variable to
     #[dynamic(default = "default_term")]
     pub term: String,
@@ -1738,6 +1744,10 @@ pub fn default_hyperlink_rules() -> Vec<hyperlink::Rule> {
         hyperlink::Rule::new(hyperlink::GENERIC_HYPERLINK_PATTERN, "$0").unwrap(),
         // implicit mailto link
         hyperlink::Rule::new(r"\b\w+@[\w-]+(\.[\w-]+)+\b", "mailto:$0").unwrap(),
+        // file paths such as src/main.rs:12:5. The `file:` prefix marks the
+        // link as a path as printed, which is resolved against the pane's
+        // working directory when the link is opened.
+        hyperlink::Rule::new(hyperlink::FILE_PATH_HYPERLINK_PATTERN, "file:$0").unwrap(),
     ]
 }
 
