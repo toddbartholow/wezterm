@@ -1595,6 +1595,16 @@ impl Config {
         cmd.env_remove("APPDIR");
         cmd.env_remove("OWD");
 
+        // wezterm renders OSC 8 hyperlinks, but the widely used
+        // supports-hyperlinks detection (and tools that copy it, such as
+        // agent CLIs) never enables them on Windows outside of Windows
+        // Terminal. FORCE_HYPERLINK=1 tells them to emit links anyway.
+        // A value already in the environment, or one from
+        // set_environment_variables, takes precedence.
+        if cmd.get_env("FORCE_HYPERLINK").is_none() {
+            cmd.env("FORCE_HYPERLINK", "1");
+        }
+
         for (k, v) in &self.set_environment_variables {
             if k == "WSLENV" {
                 wsl_env.replace(v.clone());
@@ -1608,7 +1618,7 @@ impl Config {
             if !wsl_env.is_empty() {
                 wsl_env.push(':');
             }
-            wsl_env.push_str("TERM:COLORTERM:TERM_PROGRAM:TERM_PROGRAM_VERSION");
+            wsl_env.push_str("TERM:COLORTERM:TERM_PROGRAM:TERM_PROGRAM_VERSION:FORCE_HYPERLINK");
             cmd.env("WSLENV", wsl_env);
         }
 
