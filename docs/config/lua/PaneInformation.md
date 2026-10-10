@@ -20,6 +20,7 @@ The `PaneInformation` struct contains the following fields:
 * `title` - the title of the pane, per [pane:get_title()](pane/get_title.md) at the time the pane information was captured
 * `user_vars` - the user variables defined for the pane, per [pane:get_user_vars()](pane/get_user_vars.md) at the time the pane information was captured.
 * `progress` - the progress state, per [pane:get_progress()](pane/get_progress.md) at the time the pane information was captured. {{since('nightly', inline=True)}}
+* `needs_attention` - is true if the program in the pane rang the bell or posted a notification while the pane didn't have focus, per [pane:needs_attention()](pane/needs_attention.md). {{since('nightly', inline=True)}}
 
 {{since('20220101-133340-7edc5b5a')}}
 

@@ -204,6 +204,12 @@ impl UserData for MuxPane {
             Ok(pane.has_unseen_output())
         });
 
+        methods.add_method("needs_attention", |_, this, _: ()| {
+            let mux = get_mux()?;
+            let pane = this.resolve(&mux)?;
+            Ok(pane.needs_attention())
+        });
+
         methods.add_method("is_alt_screen_active", |_, this, _: ()| {
             let mux = get_mux()?;
             let pane = this.resolve(&mux)?;

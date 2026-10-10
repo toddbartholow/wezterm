@@ -284,6 +284,12 @@ pub trait Pane: Downcast + Send + Sync {
         false
     }
 
+    /// Returns true if the program rang the bell or posted a notification
+    /// since the pane lost focus, meaning it is waiting on the user
+    fn needs_attention(&self) -> bool {
+        false
+    }
+
     /// Certain panes are OK to be closed with impunity (no prompts)
     fn can_close_without_prompting(&self, _reason: CloseReason) -> bool {
         false

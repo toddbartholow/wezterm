@@ -493,6 +493,10 @@ impl Pane for LocalPane {
         self.terminal.lock().has_unseen_output()
     }
 
+    fn needs_attention(&self) -> bool {
+        self.terminal.lock().needs_attention()
+    }
+
     fn is_mouse_grabbed(&self) -> bool {
         if self.tmux_domain.lock().is_some() {
             false
