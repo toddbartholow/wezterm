@@ -41,6 +41,26 @@ return config
 See also [hyperlink_rules](config/lua/config/hyperlink_rules.md) and
 [default_hyperlink_rules](config/lua/wezterm/default_hyperlink_rules.md).
 
+### File Links
+
+The default rules also match file paths, such as the
+`internal/script/engine.go:2076` or `src/main.rs:12:5` that compilers, test
+runners and coding agents print. Clicking one opens the file at that line in
+the editor set by [file_link_editor](config/lua/config/file_link_editor.md):
+
+```lua
+config.file_link_editor = { 'code', '--goto', '{path}:{line}:{column}' }
+```
+
+Relative paths are resolved against the pane's working directory. A path is
+only treated as a link when it has a file extension and either contains a
+directory separator or is followed by a line number, and a click does nothing
+if the file doesn't exist.
+
+When a program such as a full screen agent CLI has captured the mouse, hold
+the [bypass_mouse_reporting_modifiers](config/lua/config/bypass_mouse_reporting_modifiers.md)
+(`SHIFT` by default) while clicking so that wezterm handles the click.
+
 
 ### Explicit Hyperlinks
 

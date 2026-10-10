@@ -163,6 +163,23 @@ impl<'t> Match<'t> {
 pub const CLOSING_PARENTHESIS_HYPERLINK_PATTERN: &str =
     r"\b\w+://[^\s()]*\(\S*\)(?=\s|$|[^_/a-zA-Z0-9-])";
 pub const GENERIC_HYPERLINK_PATTERN: &str = r"\b\w+://\S+[_/a-zA-Z0-9-]";
+/// Matches a file path with an extension and an optional `:line` or
+/// `:line:column` suffix, such as `src/main.rs:12:5`, `./build.sh` or
+/// `D:\src\app\main.go`. A bare file name such as `main.go` only matches
+/// when a line number follows it, which keeps ordinary words like `e.g` and
+/// `Node.js` from turning into links. Paths that are part of a URL are left
+/// to the URL patterns.
+pub const FILE_PATH_HYPERLINK_PATTERN: &str = concat!(
+    r"(?<![\w.~/\\@+:-])",
+    r"(?:",
+    // A path containing at least one directory separator
+    r"(?:(?:[A-Za-z]:|~|\.{1,2})?[\\/](?:[\w.@+-]+[\\/])*|(?:[\w.@+-]+[\\/])+)",
+    r"[\w.@+-]*\w\.[A-Za-z][A-Za-z0-9]{0,9}",
+    // or a bare file name followed by a line number
+    r"|[\w@+-][\w.@+-]*\.[A-Za-z][A-Za-z0-9]{0,9}(?=:\d)",
+    r")",
+    r"(?::\d+(?::\d+)?)?\b",
+);
 
 impl Rule {
     /// Construct a new rule.  It may fail if the regex is invalid.
@@ -295,5 +312,52 @@ mod test {
             "http://example.com/(complete_parentheses)-((-)-()-_-",
             "Non-terminating parentheses should not impact matching the entire URL - Terminated with a valid character",
         );
+    }
+
+    #[test]
+    fn parse_file_paths() {
+        let rules = vec![
+            Rule::new(GENERIC_HYPERLINK_PATTERN, "$0").unwrap(),
+            Rule::new(FILE_PATH_HYPERLINK_PATTERN, "file:$0").unwrap(),
+        ];
+        let links = |line: &str| -> Vec<String> {
+            Rule::match_hyperlinks(line, &rules)
+                .into_iter()
+                .map(|m| m.link.uri().to_string())
+                .collect()
+        };
+
+        assert_eq!(
+            links("  internal/script/engine.go:2076:func (e *Engine) Get() {"),
+            vec!["file:internal/script/engine.go:2076"]
+        );
+        assert_eq!(links("--> src/main.rs:12:5"), vec!["file:src/main.rs:12:5"]);
+        assert_eq!(
+            links("Get-Content tools/loadtester/main.go -TotalCount 170;"),
+            vec!["file:tools/loadtester/main.go"]
+        );
+        assert_eq!(links("see engine.go:2076."), vec!["file:engine.go:2076"]);
+        assert_eq!(
+            links(r"error at D:\src\app\main.go:7"),
+            vec![r"file:D:\src\app\main.go:7"]
+        );
+        assert_eq!(links("(./build.sh)"), vec!["file:./build.sh"]);
+        assert_eq!(
+            links("~/.config/wezterm/wezterm.lua"),
+            vec!["file:~/.config/wezterm/wezterm.lua"]
+        );
+        assert_eq!(links("/etc/hosts.allow"), vec!["file:/etc/hosts.allow"]);
+
+        // A path inside a URL belongs to the URL
+        assert_eq!(
+            links("https://github.com/org/repo/blob/main/src/lib.rs"),
+            vec!["https://github.com/org/repo/blob/main/src/lib.rs"]
+        );
+
+        // Things that aren't file paths
+        let no_links: Vec<String> = vec![];
+        assert_eq!(links("e.g. this, Node.js and version 1.2.3"), no_links);
+        assert_eq!(links("read/write, I/O, 2026/10/09, v1.2/3.4"), no_links);
+        assert_eq!(links(r"cd D:\src\dcrawler"), no_links);
     }
 }
