@@ -8,29 +8,35 @@ User facing docs and guide at: https://wezterm.org/
 
 *Screenshot of wezterm on macOS, running vim*
 
+## Changes in this fork
+
+This is a personal fork of [WezTerm](https://github.com/wezterm/wezterm) with these changes:
+
+* Rename the active tab with the `RenameTab` key assignment, the "Rename tab" command palette entry, or by double-clicking the tab.
+* Reorder tabs by dragging them in the tab bar, with a move cursor and the dragged tab drawn in reverse video.
+* Click a file path such as `src/main.rs:12:5` to open it at that line and column in the editor set by `file_link_editor`.
+* Tabs whose program rang the bell or posted a notification while unfocused get a yellow dot, and Lua can read this as `needs_attention`.
+* Spawned programs get `FORCE_HYPERLINK=1`, so CLIs that check for hyperlink support print clickable links.
+* Title spinners from agent CLIs no longer pin the GUI thread, because tab bar rebuilds and `update-status` events are rate limited.
+* On Windows, looking up a pane's working directory or foreground process takes about 1.5ms instead of 28-39ms.
+* The bundled ConPTY on Windows is updated to 1.24.260710001.
+
 ## Installation
 
-https://wezterm.org/installation
+Releases from wezterm.org don't include the changes in this fork, so build it
+from source by following [docs/install/source.md](docs/install/source.md),
+which comes down to `cargo build --release` once the dependencies are in place.
 
 ## Getting help
 
-This is a spare time project, so please bear with me.  There are a couple of channels for support:
+Report problems with this fork in its
+[issue tracker](https://github.com/toddbartholow/wezterm/issues), not upstream's.
+For anything about WezTerm itself, see the documentation at https://wezterm.org/.
 
-* You can use the [GitHub issue tracker](https://github.com/wezterm/wezterm/issues) to see if someone else has a similar issue, or to file a new one.
-* Start or join a thread in our [GitHub Discussions](https://github.com/wezterm/wezterm/discussions); if you have general
-  questions or want to chat with other wezterm users, you're welcome here!
-* There is a [Matrix room via Element.io](https://matrix.to/#/#wezterm:matrix.org)
-  for (potentially!) real time discussions.
+## Supporting WezTerm
 
-The GitHub Discussions and Element/Gitter rooms are better suited for questions
-than bug reports, but don't be afraid to use whichever you are most comfortable
-using and we'll work it out.
-
-## Supporting the Project
-
-If you use and like WezTerm, please consider sponsoring it: your support helps
-to cover the fees required to maintain the project and to validate the time
-spent working on it!
+WezTerm is written and maintained by Wez Furlong. If you use and like it,
+please consider sponsoring Wez's work.
 
 [Read more about sponsoring](https://wezterm.org/sponsor.html).
 
