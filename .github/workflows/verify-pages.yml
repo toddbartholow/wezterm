@@ -15,6 +15,7 @@ jobs:
   build-docs:
     env:
       BUILD_REASON: "PR"
+      GH_TOKEN: ${{ github.token }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -34,4 +35,3 @@ jobs:
           path: .cache
       - name: Build
         run: ./ci/build-docs.sh
-
