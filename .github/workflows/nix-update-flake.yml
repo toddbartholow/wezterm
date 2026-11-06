@@ -25,7 +25,7 @@ jobs:
         uses: DeterminateSystems/flake-checker-action@main
 
       - name: Update flake.lock
-        uses: DeterminateSystems/update-flake-lock@v28
+        uses: DeterminateSystems/update-flake-lock@v29
         with:
           token: "${{ secrets.FLAKE_LOCK_GH_PAT }}"
           pr-title: 'nix: Update flake.lock'
