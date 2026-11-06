@@ -15,6 +15,7 @@ jobs:
   build-docs:
     env:
       BUILD_REASON: "PR"
+      GH_TOKEN: ${{ github.token }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -28,10 +29,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           key: ${{ github.ref }}
           path: .cache
       - name: Build
         run: ./ci/build-docs.sh
-
